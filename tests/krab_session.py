@@ -30,9 +30,15 @@ USER = "1234"
 #: ключ-пароль пользователя
 KEY = "1234"
 
-#: спецификация линий ДКС (dispak.ini: 4199=tty2 … 4223=tty24);
-#: TCPLink сам обходит занятые линии и берёт первую свободную
-PORT_SPEC = os.environ.get("KRAB_PORT", "4202-4223")
+#: линия ДКС по умолчанию — ОДНА. Автоматический перебор всех линий
+#: недопустим: система КРАБ обслуживает до 24 терминалов, и занимая их
+#: подряд, агент сам исчерпывает терминалы — после этого Монитор
+#: перестаёт загружаться и отвечает «НЕТ ДИРЕК» даже на свободной линии.
+PORT_SPEC = os.environ.get("KRAB_PORT", "4202")
+
+#: перебор линий включается только явно и только на соседние порты
+ROTATE = os.environ.get("KRAB_ROTATE") == "1"
+ROTATE_LIMIT = int(os.environ.get("KRAB_ROTATE_LIMIT", "2"))
 
 #: запасная линия КВУ (консоль tty1, порт 4198): вход по HYC<ETX>;
 #: используется, когда свободных линий ДКС нет
@@ -266,8 +272,9 @@ class KrabSession:
         вызываем его снова.
         """
         last = ""
-        for attempt in range(tries * 2):
-            if attempt:
+        rounds = tries * ROTATE_LIMIT if ROTATE else tries
+        for attempt in range(rounds):
+            if attempt and ROTATE:
                 # предыдущая линия не дала входа — берём следующую
                 if not self._open_next_line():
                     break
