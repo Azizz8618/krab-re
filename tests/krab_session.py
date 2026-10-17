@@ -24,6 +24,7 @@ if str(IE15_HOME) not in sys.path:
 
 from ie15emu.agent import Terminal, fold  # noqa: E402
 from ie15emu.link import LinkError  # noqa: E402
+from ie15emu.session import MODE_HOST, MODE_LOCAL  # noqa: E402
 
 #: шифр пользователя для тестов (первые 4 цифры — шифр ОС Диспак)
 USER = "1234"
@@ -106,6 +107,48 @@ class KrabSession:
             if attempt + 1 < attempts:
                 time.sleep(1.0)
 
+    def red_edit(self, lines, timeout: float = 60.0) -> str:
+        """Правка строк директивой РЕД — через автономный режим терминала.
+
+        Протокол взят из Школы (`ШКО РЕД`, файл `SCU101`):
+
+            РЕД                -> приглашение «/»
+            терминал в OFFLINE (клавиша РЕЖИМ, «АВТОНОМНО»)
+            исправленные строки с номерами в первых четырёх позициях:
+                все, кроме последней, заканчиваются LINE FEED (0x0A),
+                последняя — символом ETX (0x03);
+            курсор на первой изменённой строке, SEND (клавиша ПЕРЕДАЧА).
+
+        Номера исправляемых строк не обязаны идти подряд. Номер в
+        начале строки и есть номер заменяемой строки файла: в эмуляторе
+        SEND отдаёт накопленный набор, поэтому позиционировать курсор
+        по экрану не требуется — важно лишь, чтобы в наборе стояли номера.
+
+        lines — последовательность пар (номер, текст) или словарь
+        {номер: текст}; порядок вывода сохраняется.
+
+        Текст набирается строчными русскими буквами: набор Н2 эмулятора
+        для ЗАГЛАВНЫХ даёт неверные коды (key_to_bytes не различает их при
+        shift_to_rus — проверено 17.10.2026), и в файл попадает мусор.
+        """
+        pairs = list(lines.items()) if isinstance(lines, dict) else list(lines)
+        assert pairs, "нечего править"
+        self.term.wait_quiet(1.0, 30)            # дать Монитору закончить выдачу
+        out = self.directive("ред")
+        if "/" not in out:
+            raise AssertionError(f"РЕД не вошёл в режим правки: {out!r}")
+        self.term.set_mode(MODE_LOCAL)
+        try:
+            for pos, (num, text) in enumerate(pairs):
+                self.term.type(f"{num:04d} {text}")
+                # последняя строка посылки завершается ETX, остальные — LF
+                self.term.key("\x03" if pos == len(pairs) - 1 else "\x0a")
+            self.term.send()
+        finally:
+            self.term.set_mode(MODE_HOST)
+        self.term.wait_quiet(3.0, timeout)
+        return "\n".join(x for x in self.term.lines() if x.strip()[-30:])
+
     def enter_line(self) -> None:
         """Завершить набранную строку.
 
@@ -157,37 +200,32 @@ class KrabSession:
             f"нет баннера КРАБ: {text!r}"
         return text
 
+    #: Монитор КРАБ печатает баннер сразу, а таблицу директив грузит
+    #: ещё секунд 15: на «нач» в этот промежуток он отвечает «НЕТ ДИРЕК».
+    #: Проверено на живой машине 17.10.2026 — раньше это выглядело как
+    #: «отравленная линия ДКС», и перебор портов ничем не помогал.
+    READY_WAIT = 8.0
+
     def enter(self, user: str = USER, key: str = KEY,
-              timeout: float = 40.0, tries: int = 2) -> str:
+              timeout: float = 40.0, tries: int = 4) -> str:
         """Вход: «нач» → КТО? → шифр → КЛЮЧ- → ключ.
 
-        Приглашения проверяются по содержимому, а не по паузе: на линии
-        может остаться незакрытый номер от прошлого сеанса, тогда «нач»
-        не даёт «КТО?», и шифр ушёл бы как директива («НЕТ ДИРЕК»).
-        В этом случае линия «чистится» (кон, пустая посылка) и вход
-        повторяется.
+        «нач» повторяется, пока Монитор не ответит приглашением «КТО»:
+        на ещё не прогрузившемся Мониторе директива отвергается. Перевызы-
+        вать КРАБ здесь нельзя — лишний экземпляр только мешает.
         """
         for attempt in range(tries):
             self.send("нач", 1.5, timeout)
-            if not self.term.wait_for("KTО", timeout=timeout):
-                # «НЕТ ДИРЕК» на НАЧ — Монитор не загрузился (частая
-                # картина после обрыва сеанса): перевызываем КРАБ
-                if "НЕТ ДИРЕК" in self.screen():
-                    self.start()
-                    self.send("нач", 1.5, timeout)
-                    if not self.term.wait_for("KTО", timeout=timeout):
-                        continue
-                else:
-                    # приглашения нет — номер занят другой сессией;
-                    # этот случай разбирает login()
+            if self.term.wait_for("KTО", timeout=12):
+                self.send(user, 1.5, timeout)
+                if not self.term.wait_for("KЛЮЧ", timeout=timeout):
                     continue
-            self.send(user, 1.5, timeout)
-            if not self.term.wait_for("KЛЮЧ", timeout=timeout):
-                continue
-            self.send(key, 1.5, timeout)
-            # сеанс открыт, если машина требует директиву приглашением «-»
-            if "СООБЩИТЕ ВАШ НОМЕР" not in self.screen():
-                return self.screen()
+                self.send(key, 1.5, timeout)
+                # сеанс открыт, если машина не требует номер заново
+                if "СООБЩИТЕ ВАШ НОМЕР" not in self.screen():
+                    return self.screen()
+            if attempt + 1 < tries:
+                time.sleep(self.READY_WAIT)
         raise AssertionError(f"не удалось войти в номер {user}: "
                              f"{self.screen()!r}")
 
@@ -275,33 +313,25 @@ class KrabSession:
         rounds = tries * ROTATE_LIMIT if ROTATE else tries
         for attempt in range(rounds):
             if attempt and ROTATE:
-                # предыдущая линия не дала входа — берём следующую
+                # линия не дала входа — берём следующую по кругу
                 if not self._open_next_line():
                     break
             if attempt:
-                # линия осталась в залипшем состоянии («нач» → НЕТ ДИРЕК):
-                # закрываем её и берём другую свободную линию ДКС
+                # переподключение обрывает возможный залипший номер на линии
                 try:
                     self.term.close()
                 except Exception:
                     pass
                 self.term = Terminal(self.url, machine=self.machine)
-            # если КРАБ уже вызван (повторный вход внутри сеанса), «краб»
-            # не набираем — это не директива и даст «НЕТ ДИРЕК»
-            # баннер ищем по кадру вместе с историей: в повторном
-            # входе баннер уже ушёл с экрана, но КРАБ открыт
             try:
-                if "К  Р  А  Б" not in self.term.text():
+                # «краб» набираем только если КРАБ не открыт: это не
+                # директива (даёт «НЕТ ДИРЕК»), а лишний вызов заводит
+                # второй экземпляр, который ещё секунд 15 не готов
+                # принимать директивы — вход в него сразу не идёт.
+                if not self.inside_krab():
                     self.start()
-                # КОН здесь НЕ нужен и вреден: он завершает сеанс КРАБ, если
-                # работа продолжается. Повторный вход делается прямо из
-                # открытого Монитора директивами «нач» → КТО → ключ.
-                if not self.inside_krab():            # КРАБ не открыт — вызвать
-                    self.start()
-                return self.enter(user, key, tries=1)
+                return self.enter(user, key)
             except (AssertionError, LinkError) as exc:
-                # линия не дала входа (зависший экземпляр КРАБ, Монитор не
-                # загрузился) — следующая попытка пойдёт на другой порт
                 last = str(exc)
         raise AssertionError(f"вход в номер {user} не удался: {last}")
 
@@ -326,8 +356,8 @@ class KrabSession:
 #: «+» — набор строк в директиве ДОП, «/» — редактор РЕД
     PROMPTS = ("-", "*", "+", "/", "КОНЕЦ СЕАНСА")
 
-    def directive(self, cmd: str, quiet: float = 0.2,
-                  timeout: float = 15.0) -> str:
+    def directive(self, cmd: str, quiet: float = 0.3,
+                  timeout: float = 25.0) -> str:
         """Исполнить директиву, вернуть только её выдачу (свернутую fold).
 
         Ожидание — по приглашению («-» в Мониторе, «*» в программе ЛИСТ),
@@ -357,7 +387,7 @@ class KrabSession:
                 text = (self.term.screen_.row_text("frame", bottom)
                         or "").strip()
                 if text in self.PROMPTS:
-                    self.term.wait_quiet(0.2, 1.5)   # добрать хвост выдачи
+                    self.term.wait_quiet(0.3, 4.0)   # добрать хвост выдачи
                     return True
             self.term.pump(timeout=0.15)
         return False
@@ -375,6 +405,24 @@ class KrabSession:
         needle = fold(prompt)
         self.term.wait_for(needle, timeout=timeout)
         return fold(self.term.screen())
+
+    def wait_new(self, needle: str, timeout: float = 40.0,
+                 mark: int | None = None) -> bool:
+        """Ждать строку, набранную ПОСЛЕ отметки, а не где-либо на экране.
+
+        Искать по всему кадру нельзя: на нём ещё лежат приглашения
+        предыдущих директив («+» от прошлого ввода ДОП), и ожидание
+        проходит, хотя нужная директива не началась.
+        """
+        rev = self.term.mark() if mark is None else mark
+        needle = fold(needle).upper()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for line in self.term.new_lines(rev):
+                if needle in fold(line).upper():
+                    return True
+            self.term.pump(0.25)
+        return False
 
     def screen(self) -> str:
         return fold(self.term.screen())

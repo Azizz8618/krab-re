@@ -39,36 +39,72 @@ _counter = itertools.count(1)
 
 
 def fname() -> str:
-    """Имя файла, уникальное в пределах прогона.
+    """Имя файла, уникальное в пределах прогона и не длиннее шести знаков.
+
+    ШКО ИМЯ: «последовательность из не более шести символов, начинающаяся
+    с буквы». Более длинное имя отвергается — «ИМЯ НЕ ИДЕНТИФИКАТОР», —
+    и все следующие директивы работают уже с чужим текущим файлом.
 
     Файлы на сбойных зонах переживают сеанс, поэтому одно и то же имя
     копит содержимое от теста к тесту — каждому тесту нужен свой файл.
     """
-    return f"бтс{next(_counter)}{int(time.time()) % 100:02d}"
+    return f"б{next(_counter) % 100:02d}{int(time.time()) % 100:02d}"
 
 
 def make_file(kr: KrabSession, lines=LINES) -> str:
     """Образовать текущий файл и наполнить его строками через ДОП.
 
     ДОП — построчный ввод: система спрашивает «+» и ждёт следующую строку,
-    пока не придёт пустая, поэтому каждая строка — отдельный вызов.
+    пока не придёт пустая, поэтому каждая строка — отдельный вызов, а конец
+    ввода проверяется возвратом приглашения «-» в Монитор.
     """
     name = fname()
-    kr.directive(f"имя {name}")
-    out = kr.directive("доп")
-    assert "+" in out, f"нет приглашения ДОП: {out!r}"
+    out = kr.directive(f"имя {name}")
+    assert "ИМЯ НЕ ИДЕНТИФИКАТОР" not in out, f"имя отвергнуто: {name} — {out!r}"
+    rev = kr.term.mark()
+    kr.directive("доп")
+    # «+» ждём только среди новых строк: на кадре ещё лежит «+» от прошлого
+    # ввода, и поиск по всему экрану проходит, даже если ДОП не начался
+    assert kr.wait_new("+", timeout=40, mark=rev), "ДОП не спросил первую строку"
     for text in lines:
         kr.directive(text, timeout=20)
+    rev = kr.term.mark()
     kr.directive("", timeout=20)                 # пустая — конец ввода
+    assert kr.wait_new("-", timeout=40, mark=rev), "после ДОП не вернулся Монитор"
     return name
 
 
-def cards_of(kr: KrabSession) -> int:
-    """Число карт текущего файла по ответу ДЛИ."""
+def _dli(kr: KrabSession) -> tuple[int, int, int]:
+    """Ответ ДЛИ: карты, слова, признаки конца строки.
+
+    Ответ — строка из трёх четёрок цифр. Первое число в выдаче брать нельзя:
+    в окне попадают и имена файлов, где четвёрки тоже есть.
+    """
     out = kr.directive("дли")
-    numbers = re.findall(r"\d{4}", out)
-    assert numbers, f"ДЛИ без чисел: {out!r}"
-    return int(numbers[0])
+    for line in out.splitlines():
+        m = re.fullmatch(r"\s*(\d{4})\s+(\d{4})\s+(\d{4})\s*", line)
+        if m:
+            return tuple(int(m.group(i)) for i in (1, 2, 3))
+    raise AssertionError(f"ДЛИ без строки из трёх четёрок: {out!r}")
+
+
+def cards_of(kr: KrabSession, tries: int = 3) -> int:
+    """Число карт текущего файла — устойчиво к запаздыванию ответа.
+
+    Машина печатает эхо директивы раньше, чем правка вступает в силу, и ДЛИ,
+    отправленный сразу после, успевает показать состояние ДО правки (проверено
+    на живой машине: после «дбл 1 1 4» первый ДЛИ отдавал прежние 4 карты
+    вместо 5). Поэтому читаем ДЛИ до двух совпадений подряд — только тогда
+    состояние считается устоявшимся.
+    """
+    prev = None
+    for _ in range(tries):
+        kr.term.wait_quiet(1.5, 30)
+        cur = _dli(kr)
+        if cur == prev:
+            return cur[0]
+        prev = cur
+    return prev[0]
 
 
 class KrabEdit(unittest.TestCase):
@@ -131,21 +167,25 @@ class EditTextFile(KrabEdit):
         self.assertIn("0003", self.kr.directive("дли"))
 
     def test_05_red_s_massivom(self):
-        """РЕД с образованным файлом входит в режим «/»."""
+        """РЕД с образованным файлом входит в режим «/».
+
+        Форма обращения — `Р[ЕД]`, без параметров: номера правящихся строк
+        передаются в самих строках, в первых четырёх позициях.
+        """
         self._new_file()
-        out = self.kr.directive("ред 1-999")
-        self.assertIn("РЕД 1-999", out)
+        out = self.kr.directive("ред")
+        self.assertIn("РЕД", out)
         self.assertIn("/", out)                  # приглашение редактора
 
     def test_06_red_bez_massiva(self):
         """РЕД без образованного файла: НЕТ ИМЕНИ МАССИВА.
 
         Отдельный чистый вход: после директив ИМЯ текущий файл уже образован,
-        и РЕД войдёт в режим «/», а не откажет.
+        и РЕД войдёт в режим «/», а не откажется.
         """
         with KrabSession() as kr:
             kr.login_or_skip()
-            self.assertIn("НЕТ ИМЕНИ МАССИВА", kr.directive("ред 1-999"))
+            self.assertIn("НЕТ ИМЕНИ МАССИВА", kr.directive("ред"))
 
     def test_07_zap_trebuet_parol(self):
         """ЗАП запрашивает ПАРОЛЬ; голая посылка даёт отказ гостя."""
@@ -179,6 +219,57 @@ class EditTextFile(KrabEdit):
         self.assertRegex(out, r"0003 \S+")
 
 
+class RedEditing(KrabEdit):
+    """РЕД — правка нескольких строк через автономный режим терминала.
+
+    Протокол (ШКО РЕД, файл `SCU101`): сначала строки выдаются на экран
+    директивой ВЫД, затем РЕД даёт приглашение «/», терминал переводится
+    в OFFLINE («АВТОНОМНО»), и исправленные строки — с номерами в первых
+    четырёх позициях — уходят по SEND. Все строки, кроме последней,
+    заканчиваются LINE FEED (0x0A), последняя — символом ETX (0x03).
+    """
+
+    def test_01_red_menyashchestya_strok(self):
+        """РЕД правит несколько строк за один посыл."""
+        self._new_file()
+        self.kr.red_edit({1: "январь", 2: "декабрь", 3: "ноябрь"})
+        out = self.kr.directive("выд 1-3")
+        self.assertIn("0002 ДЕКАБРЬ", out)
+        self.assertIn("0003 НОЯБРЬ", out)
+
+    def test_02_red_odnoj_stroki(self):
+        """РЕД правит одну строку — она идёт последней и завершается ETX."""
+        self._new_file()
+        self.kr.red_edit({2: "декабрь"})
+        self.assertIn("0002 ДЕКАБРЬ", self.kr.directive("выд 2-2"))
+
+    def test_03_red_nepodryadnye_nomera(self):
+        """Номера правящихся строк не обязаны идти подряд."""
+        self._new_file()
+        self.kr.red_edit({1: "январь", 3: "ноябрь"})
+        out = self.kr.directive("выд 1-3")
+        self.assertIn("0001 ЯНВАРЬ", out)
+        self.assertIn("0003 НОЯБРЬ", out)
+
+    def test_04_red_ne_menyaet_chisla_kart(self):
+        """Число карт после РЕД то же — строки заменяются, не добавляются."""
+        self._new_file()
+        self.assertEqual(self.cards(), 3)
+        self.kr.red_edit({1: "первая", 2: "вторая", 3: "третья"})
+        self.assertEqual(self.cards(), 3)
+
+    def test_05_red_smenyaet_soderzhanie(self):
+        """После РЕД файл читается с новым содержимым."""
+        self._new_file()
+        self.kr.red_edit({3: "сентябрь"})
+        out = self.kr.directive("выд 3-3")
+        # смотрим только выдачу ВЫД: directive() отдаёт и эхо предыдущих
+        # директив сеанса, где «МАРТ» — текст, введённый через ДОП
+        shown = out.rsplit("ВЫД 3-3", 1)[-1]
+        self.assertRegex(shown, r"0003 СЕНТЯБРЬ")
+        self.assertNotIn("МАРТ", shown)
+
+
 class EditingDirectives(KrabEdit):
     """Директивы правки строк: ДБЛ, СДВ, СКЛ, УПС, РЗД + КЗМ.
 
@@ -187,25 +278,31 @@ class EditingDirectives(KrabEdit):
     """
 
     def test_01_dbl_duplicates_lines(self):
-        """ДБЛ 1-1-4 добавляет копию первой строки → карт на одну больше."""
-        self._new_file()
+        """ДБЛ 1 1 4 — копия первой строки перед строкой 4: карт на одну больше.
+
+        Форма `ДБ[Л] <НАЧСТР> <КОНСТР> <НОМСТР>` — параметры через ПРОБЕЛ
+        (ШКО ДБЛ, `SCU105`), оригинал сохраняется. Строки 1…1 вставляются
+        ПЕРЕД строкой 4, поэтому файл должен быть не короче четырёх строк.
+        """
+        make_file(self.kr, ("январь", "февраль", "март", "апрель"))
         before = self.cards()
-        self.assertEqual(before, 3)
-        self.kr.directive("дбл 1-1-4")
+        self.assertEqual(before, 4)
+        self.kr.directive("дбл 1 1 4")
         self.assertEqual(self.cards(), before + 1)
 
     def test_02_sdv_keeps_line_count(self):
-        """СДВ 1-1-4 переносит строку: копия вставлена, исходная удалена."""
-        self._new_file()
+        """СДВ 1 1 4 — строка переносится, оригинал не сохраняется."""
+        make_file(self.kr, ("январь", "февраль", "март", "апрель"))
         before = self.cards()
-        self.kr.directive("сдв 1-1-4")
+        self.assertEqual(before, 4)
+        self.kr.directive("сдв 1 1 4")
         self.assertEqual(self.cards(), before)
 
     def test_03_skl_glues_lines(self):
-        """СКЛ 1-2 склеивает две строки → карт на одну меньше."""
+        """СКЛ 1 2 — склейка карт: карт на одну меньше."""
         self._new_file()
         before = self.cards()
-        self.kr.directive("скл 1-2")
+        self.kr.directive("скл 1 2")
         self.assertEqual(self.cards(), before - 1)
 
     def test_04_ups_sets_end_of_line(self):
@@ -231,12 +328,19 @@ class EditingDirectives(KrabEdit):
         self.assertNotIn("ОШ В ДИР", out)
 
     def test_06_kzm_contextual_replace(self):
-        """КЗМ .<КТ>.<РТ>.<N1>-<N2> — контекстная замена в диапазоне."""
+        """КЗМ .<КТ>.<РТ>.<N1>-<N2> — контекстная замена в диапазоне.
+
+        Замена идёт по вхождению: «январь» = «янв» + «арь», поэтому
+        «.янв.май.» даёт «майарь», а машина отчитывается числом замен —
+        «ЗАМЕН 000001 ШТ.». Проверен диапазон 1-3: «янв» встречается
+        только в первой строке, значит замена ровно одна.
+        """
         self._new_file()
         self.kr.directive("рзд .")
-        out = self.kr.directive("кзм .янв.мая.1-3")
+        out = self.kr.directive("кзм .янв.май.1-3")
         self.assertNotIn("ОШ В ДИР", out)
-        self.assertIn("МАЯРЬ", self.kr.directive("выд 1-1"))
+        self.assertIn("ЗАМЕН 000001 ШТ.", out)
+        self.assertIn("МАЙАРЬ", self.kr.directive("выд 1-1"))
 
     def test_07_kzm_wrong_separator_rejected(self):
         """КЗМ с чужим разделителем отвергается: ОШ В ДИР."""
