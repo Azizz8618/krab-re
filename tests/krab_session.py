@@ -59,6 +59,37 @@ class KrabSession:
         self.term.session.nabor = "n2"
 
     # --- протокол входа ------------------------------------------------
+    def send_text(self, cmd: str, attempts: int = 2) -> None:
+        """Набрать строку клавишами — штатным путём эмулятора 15ИЭ.
+
+        Набор идёт через Terminal.type()/feed_key: сам эмулятор переводит
+        знаки в коды линии, ручная отправка кодов мимо него ломает
+        раскладку и набор знаков.
+
+        Эхо сверяется с набранным: сразу после входа линия успевает
+        исказить символы («бтс398» → «,NС398»), и такой директивы машина
+        не понимает. При расхождении набор повторяется.
+        """
+        want = fold(cmd).upper()
+        for attempt in range(attempts):
+            rev = self.term.mark()
+            self.term.type(cmd)
+            self.enter_line()
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                self.term.pump(0.2)
+                lines = [x.strip() for x in self.term.new_lines(rev)
+                         if x.strip()]
+                if not lines:
+                    time.sleep(0.3)
+                    continue
+                echo = fold(lines[0]).upper().replace(" ", "")
+                if echo == want.replace(" ", ""):
+                    return
+                break
+            if attempt + 1 < attempts:
+                time.sleep(1.0)
+
     def enter_line(self) -> None:
         """Завершить набранную строку.
 
@@ -140,6 +171,26 @@ class KrabSession:
         """Окончание работы в номере (директива КОН)."""
         return self.send("кон", 3.0, timeout)
 
+    def reconnect(self) -> None:
+        """Закрыть линию и открыть новую (свободную).
+
+        После КОНЕЦ СЕАНСА старая линия перестаёт принимать ввод — КРАБ
+        на ней больше не запускается, и набор уходит в никуда. Новая
+        линия ДКС чистая и работает штатно.
+        """
+        try:
+            self.term.close()
+        except Exception:
+            pass
+        self.serial = False
+        try:
+            self.term = Terminal(self.url, machine=self.machine)
+        except LinkError:
+            self.serial = True
+            self.url = f"tcp://127.0.0.1:{SERIAL_PORT}"
+            self.term = Terminal(self.url, machine=self.machine)
+        self.term.session.nabor = "n2"
+
     def inside_krab(self) -> bool:
         """Открыт ли сейчас КРАБ (последняя строка кадра — его приглашение)."""
         lines = [x.strip() for x in self.term.lines() if x.strip()]
@@ -211,8 +262,7 @@ class KrabSession:
         строк, и следующая команда, отправленная раньше, теряется.
         """
         rev = self.term.mark()
-        self.term.type(cmd)
-        self.enter_line()
+        self.send_text(cmd)
         self._await_prompt(rev, timeout)
         return "\n".join(fold(x.strip())
                          for x in self.term.new_lines(rev) if x.strip())
@@ -243,8 +293,7 @@ class KrabSession:
     def send(self, cmd: str, quiet: float = 1.5,
              timeout: float = 40.0) -> str:
         """Набрать строку и вернуть весь экран после ответа."""
-        self.term.type(cmd)
-        self.enter_line()
+        self.send_text(cmd)
         self.term.wait_quiet(quiet, timeout)
         return fold(self.term.screen())
 

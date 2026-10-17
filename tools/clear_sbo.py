@@ -29,7 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
 
-from krab_session import KEY, USER, KrabSession  # noqa: E402
+from krab_session import KEY, USER, KrabSession, fold  # noqa: E402
 
 
 def list_files(kr: KrabSession) -> list[str]:
@@ -41,7 +41,8 @@ def list_files(kr: KrabSession) -> list[str]:
         m = re.match(r"^\s*([А-ЯЁ][А-ЯЁа-яё0-9]{1,7})\s+\d{4,6}\b", line)
         if m and m.group(1) != "СБО":
             names.append(m.group(1))
-    return names
+    # список печатается по терминалам — одинаковые имена повторяются
+    return list(dict.fromkeys(names))
 
 
 def main() -> int:
@@ -68,10 +69,19 @@ def main() -> int:
                 return 0
             # по одному файлу за сеанс: после КОН линия успевает освободиться,
             # а набранное по символам имя не искажается
-            name = files[0]
+            # имя, записанное неверным набором, набрать нельзя —
+            # такие остаются до истечения срока хранения
+            clean = [n for n in files
+                     if n.upper() == fold(n).upper() and n.isalpha()]
+            if not clean:
+                print("все имена искажены — чистить вручную")
+                return 1
+            name = clean[0]
             answer = kr.directive(f"имя {name}", timeout=25)
             print(f"  ИМЯ {name}: {' | '.join(answer.splitlines()[-2:])[:70]}")
             kr.directive("кон", timeout=30)      # файл на СБЗ пропадает
+            time.sleep(5)
+            kr.reconnect()                        # после КОН старая линия мертва
             kr.login(args.user, args.key)
     finally:
         try:
