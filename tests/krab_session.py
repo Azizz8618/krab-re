@@ -23,6 +23,7 @@ if str(IE15_HOME) not in sys.path:
     sys.path.insert(0, str(IE15_HOME))
 
 from ie15emu.agent import Terminal, fold  # noqa: E402
+from ie15emu.link import LinkError  # noqa: E402
 
 #: шифр пользователя для тестов (первые 4 цифры — шифр ОС Диспак)
 USER = "1234"
@@ -33,23 +34,73 @@ KEY = "1234"
 #: TCPLink сам обходит занятые линии и берёт первую свободную
 PORT_SPEC = os.environ.get("KRAB_PORT", "4202-4223")
 
+#: запасная линия КВУ (консоль tty1, порт 4198): вход по HYC<ETX>;
+#: используется, когда свободных линий ДКС нет
+SERIAL_PORT = os.environ.get("KRAB_SERIAL_PORT", "4198")
+
 
 class KrabSession:
     """Сеанс КРАБ на линии ДКС, управляемый как человеком-оператором."""
 
     def __init__(self, port: str = PORT_SPEC, machine: str = "6") -> None:
-        self.url = f"tcp://127.0.0.1:{port}"
         self.machine = machine
-        self.term = Terminal(self.url, machine=machine)
+        self.serial = False
+        try:
+            self.url = f"tcp://127.0.0.1:{port}"
+            self.term = Terminal(self.url, machine=machine)
+        except LinkError:
+            # линий ДКС нет — переходим на серийную линию КВУ
+            self.serial = True
+            self.url = f"tcp://127.0.0.1:{SERIAL_PORT}"
+            self.term = Terminal(self.url, machine=machine)
+        # набор Н2 (VT-52) — рабочий для БЭСМ-6: русские буквы уходят
+        # кодами КОИ7. Н0 печатает латиницу (директивы не вводятся, такой
+        # набор удобен для оболочки SIMH), Н1 для этой машины не годится.
+        self.term.session.nabor = "n2"
 
     # --- протокол входа ------------------------------------------------
+    def enter_line(self) -> None:
+        """Завершить набранную строку.
+
+        На серийной линии КВУ код ETX (0x03) требуется только на входе
+        (HYC); набранные директивы завершаются обычной клавишей Enter.
+        """
+        self.term.key("KEY_ENTER")
+
+    def _enter_serial(self, timeout: float = 25.0) -> None:
+        """Вход на серийную линию КВУ: HYC + ETX, затем баннер ОС ДИСПАК."""
+        self.term.drain(quiet=0.5, timeout=8)
+        self.term.link.send(b"HYC\x03")
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.term.pump(0.4)
+            screen = self.term.screen()
+            if "117" in screen or "ДИCПAK" in screen:
+                # приветствие печатается порциями: ждём, пока кадр устоится,
+                # иначе следующий ввод уходит в машину до готовности
+                self.term.wait_quiet(quiet=1.5, timeout=25)
+                return
+        raise AssertionError(f"ОС ДИСПАК не ответила: {self.term.screen()!r}")
+
     def start(self, timeout: float = 40.0) -> str:
         """Вызвать КРАБ и дождаться баннера и приглашения «-»."""
+        if self.serial:
+            # на серийной линии лишний Enter сбивает ОС с приглашения:
+            # сразу после ответа «ЗДРАВСТВУЙТЕ» набираем «краб»
+            self._enter_serial()
+            self.term.type("краб")
+            self.enter_line()
+            self.term.wait_for("BEP.", timeout=25)
+            self.term.wait_for("ОT ", timeout=25)
+            text = fold(self.term.screen())
+            assert "К  Р  А  Б" in text and "ВЕР." in text, \
+                f"нет баннера КРАБ: {text!r}"
+            return text
         self.term.drain(quiet=0.3, timeout=5)
-        self.term.key("KEY_ENTER")
+        self.enter_line()
         self.term.wait_quiet(0.6, 15)          # приглашение «ЭВМ-3,TNNN»
         self.term.type("краб")
-        self.term.key("KEY_ENTER")
+        self.enter_line()
         # ждём по содержимому, а не по таймеру: на загруженной машине
         # баннер «** К  Р  А  Б ** (ВЕР.xx ОТ …)» печатается с задержкой
         self.term.wait_for("BEP.", timeout=25)   # латентная часть баннера
@@ -142,7 +193,7 @@ class KrabSession:
             if not lines or lines[-1] == "-":
                 return self.screen()
             self.term.type("кон")
-            self.term.key("KEY_ENTER")
+            self.enter_line()
             self.term.wait_quiet(1.0, timeout)
         return self.screen()
 
@@ -161,7 +212,7 @@ class KrabSession:
         """
         rev = self.term.mark()
         self.term.type(cmd)
-        self.term.key("KEY_ENTER")
+        self.enter_line()
         self._await_prompt(rev, timeout)
         return "\n".join(fold(x.strip())
                          for x in self.term.new_lines(rev) if x.strip())
@@ -193,7 +244,7 @@ class KrabSession:
              timeout: float = 40.0) -> str:
         """Набрать строку и вернуть весь экран после ответа."""
         self.term.type(cmd)
-        self.term.key("KEY_ENTER")
+        self.enter_line()
         self.term.wait_quiet(quiet, timeout)
         return fold(self.term.screen())
 
@@ -225,7 +276,7 @@ class KrabSession:
         try:
             if "** K  P  A  B **" in self.screen():
                 self.term.type("кон")
-                self.term.key("KEY_ENTER")
+                self.enter_line()
                 self.term.wait_quiet(2.0, 30)
         finally:
             self.term.close()
