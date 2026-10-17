@@ -24,16 +24,18 @@ class MonitorAccess(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.kr = KrabSession()
-        cls.kr.login()
+        cls.banner = cls.kr.login()     # баннер получаем при входе
+        cls.kr.cleanup()
 
     @classmethod
     def tearDownClass(cls):
+        cls.kr.cleanup()
         cls.kr.close()
 
     # --- запуск системы ------------------------------------------------
     def test_01_banner(self):
         """Вызов «краб» даёт баннер, версию и приглашение директивы."""
-        text = self.kr.start()
+        text = self.banner               # баннер снят при входе (login())
         self.assertIn("К  Р  А  Б", text)
         self.assertIn("ВЕР.", text)              # (ВЕР.19 ОТ 27.11.92)
         self.assertIn("27.11.92", text)

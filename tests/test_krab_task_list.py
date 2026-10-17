@@ -49,9 +49,11 @@ class TaskFormation(unittest.TestCase):
     def setUpClass(cls):
         cls.kr = KrabSession()
         cls.kr.login()
+        cls.kr.cleanup()
 
     @classmethod
     def tearDownClass(cls):
+        cls.kr.cleanup()
         cls.kr.close()
 
     def out(self, cmd, quiet=3.0, timeout=90.0):
@@ -62,7 +64,7 @@ class TaskFormation(unittest.TestCase):
         """Вернуть терминал в Монитор (общий механизм драйвера)."""
         return self.kr.ensure_monitor()
 
-    def wait_pz_free(self, tries: int = 6, pause: float = 3.0) -> bool:
+    def wait_pz_free(self, tries: int = 4, pause: float = 2.0) -> bool:
         """Дождаться, пока ПЗ пользователя освободится.
 
         У номера может быть только одна подчинённая задача: повторное
@@ -93,16 +95,16 @@ class TaskFormation(unittest.TestCase):
         self.ensure_monitor()
         self.wait_pz_free()
         self.out(f"имя {nm}")
-        out = self.out("фор пз", quiet=3.0, timeout=30)
+        out = self.out("фор пз", quiet=2.5, timeout=20)
         if "ВОЙТИ" in out:
-            out += "\n" + self.out("да", quiet=3.0, timeout=30)
+            out += "\n" + self.out("да", quiet=2.5, timeout=20)
         return out
 
     # --- каталог --------------------------------------------------------
     def test_01_ktl_arhiva_1234(self):
         """КТЛ: в архиве номера есть ФОРГДР (Фортран) и КАЛЬК (Паскаль)."""
         self.ensure_monitor()
-        out = self.out("ктл", timeout=25)
+        out = self.out("ктл", timeout=15)
         self.assertIn("ФОРГДР", out)
         self.assertIn("КАЛЬК", out)
         self.assertIn("123400", out)
@@ -145,16 +147,16 @@ class TaskFormation(unittest.TestCase):
     def test_05_lis_shows_listing_of_task(self):
         """ЛИС → ДЛИ → ВЫД: листинг подчинённой задачи виден на экране."""
         self.form_pz()
-        self.out("лис", quiet=3.0, timeout=30)
+        self.out("лис", quiet=2.5, timeout=20)
         # ждём баннер программы ЛИСТ («ЛИСТ*ВЕР…»)
         self.assertTrue(
-            self.kr.term.wait_for("ЛИCT", timeout=30),
+            self.kr.term.wait_for("ЛИCT", timeout=20),
             f"нет программы ЛИСТ: {self.kr.screen()!r}",
         )
-        dl = self.out("дли", quiet=2.5, timeout=25)
+        dl = self.out("дли", quiet=2.0, timeout=15)
         self.assertIn("ТРАК", dl)                 # ЗТРАК/ИТРАК
         self.assertIn("КОНЕЦ БУФЕРА", dl)         # буфер листинга дочитан
-        vy = self.out("выд", quiet=2.5, timeout=25)
+        vy = self.out("выд", quiet=2.0, timeout=15)
         # содержимое листинга задачи: любые строки, кроме эха директивы ВЫД
         # и приглашения «*» — конкретный текст задачи не фиксирован
         body = [x for x in vy.splitlines()
@@ -164,9 +166,9 @@ class TaskFormation(unittest.TestCase):
     def test_06_kon_from_list_back_to_monitor(self):
         """КОН в программе ЛИСТ возвращает в Монитор абонентов («-»)."""
         self.form_pz()
-        self.out("лис", quiet=3.0, timeout=30)
-        self.kr.term.wait_for("ЛИCT", timeout=30)
-        self.out("кон", quiet=2.5, timeout=25)
+        self.out("лис", quiet=2.5, timeout=20)
+        self.kr.term.wait_for("ЛИCT", timeout=20)
+        self.out("кон", quiet=2.0, timeout=15)
         lines = [x.strip() for x in self.kr.term.lines() if x.strip()]
         self.assertTrue(lines and lines[-1] == "-",
                         f"не вернулись в Монитор: {lines[-3:]!r}")
@@ -176,12 +178,12 @@ class TaskFormation(unittest.TestCase):
         """ФОР ПС для диалоговой задачи КАЛЬК (паспорт с ТЕЛЕ^)."""
         self.ensure_monitor()
         self.out("имя кальк")
-        out = self.out("фор пс", quiet=3.0, timeout=30)
+        out = self.out("фор пс", quiet=2.5, timeout=20)
         self.assertTrue(fold(out), "нет ответа на ФОР ПС")
         # ответ либо содержит шифр задачи, либо сообщение об отказе —
         # важно, что система ответила и осталась в Мониторе
         if "ШИФР" not in out and "ШИФP" not in out:
-            self.out("кон", quiet=2.5, timeout=25)
+            self.out("кон", quiet=2.0, timeout=15)
 
 
 if __name__ == "__main__":

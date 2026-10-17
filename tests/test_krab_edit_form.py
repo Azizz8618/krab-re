@@ -38,9 +38,11 @@ class EditTextFile(unittest.TestCase):
     def setUpClass(cls):
         cls.kr = KrabSession()
         cls.kr.login()
+        cls.kr.cleanup()
 
     @classmethod
     def tearDownClass(cls):
+        cls.kr.cleanup()
         cls.kr.close()
 
     def _new_file(self):
@@ -147,6 +149,7 @@ class FormationLive(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        cls.kr.cleanup()
         cls.kr.close()
 
     def test_form_and_list(self):

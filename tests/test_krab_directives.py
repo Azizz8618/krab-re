@@ -29,9 +29,11 @@ class Directives(unittest.TestCase):
     def setUpClass(cls):
         cls.kr = KrabSession()
         cls.kr.login()
+        cls.kr.cleanup()
 
     @classmethod
     def tearDownClass(cls):
+        cls.kr.cleanup()
         cls.kr.close()
 
     # --- справочные директивы ------------------------------------------
@@ -99,9 +101,13 @@ class Directives(unittest.TestCase):
 
     def test_10_shko_ins_ma(self):
         """ШКО ИНС МА настраивает школу на Монитор абонентов."""
-        self.kr.directive("шко инс ма", quiet=2.5, timeout=60)
-        out = self.kr.directive("шко дир", quiet=2.5, timeout=60)
-        self.assertIn("НАЧ", fold(out.upper()))
+        self.kr.directive("шко инс ма", timeout=20)
+        # «шко дир» печатает справку о пяти группах; список директив
+        # группы ВХОДА-ВЫХОДА — по «шко дир вх», там есть НАЧ
+        out = self.kr.directive("шко дир вх", timeout=20)
+        # сами директивы Школа печатает с разрядкой («Н А Ч»), а описания
+        # слитно — сверяем по описанию директивы НАЧ
+        self.assertIn("НАЧАЛО РАБОТЫ", out)
 
     def test_11_kon_posle_shkoly(self):
         """Даже из блока Школы КОН закрывает номер."""
@@ -111,9 +117,13 @@ class Directives(unittest.TestCase):
     # --- только что вошедший пользователь -------------------------------
     def test_12_povtorny_vhod(self):
         """После КОН повторный вход тем же номером работает."""
-        self.kr.login()
+        # мы всё ещё внутри КРАБ (после КОН номер закрыт, но система
+        # вызвана) — достаточно войти заново, «краб» набирать не нужно
+        self.kr.enter()
         self.kr.ensure_monitor()
-        out = self.kr.directive("тер")
+        out = self.kr.directive("тер", timeout=20)
+        if "ФИЗТЕР" not in out:      # на загруженной машине ответ отстаёт
+            out = self.kr.directive("тер", timeout=20)
         self.assertIn("ФИЗТЕР", out)
         self.kr.exit()
 

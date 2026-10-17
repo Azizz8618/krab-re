@@ -38,20 +38,22 @@ class KrabSession:
     """Сеанс КРАБ на линии ДКС, управляемый как человеком-оператором."""
 
     def __init__(self, port: str = PORT_SPEC, machine: str = "6") -> None:
-        self.term = Terminal(f"tcp://127.0.0.1:{port}", machine=machine)
+        self.url = f"tcp://127.0.0.1:{port}"
+        self.machine = machine
+        self.term = Terminal(self.url, machine=machine)
 
     # --- протокол входа ------------------------------------------------
     def start(self, timeout: float = 40.0) -> str:
         """Вызвать КРАБ и дождаться баннера и приглашения «-»."""
-        self.term.drain(quiet=0.5, timeout=10)
+        self.term.drain(quiet=0.3, timeout=5)
         self.term.key("KEY_ENTER")
-        self.term.wait_quiet(1.0, 25)          # приглашение «ЭВМ-3,TNNN»
+        self.term.wait_quiet(0.6, 15)          # приглашение «ЭВМ-3,TNNN»
         self.term.type("краб")
         self.term.key("KEY_ENTER")
         # ждём по содержимому, а не по таймеру: на загруженной машине
         # баннер «** К  Р  А  Б ** (ВЕР.xx ОТ …)» печатается с задержкой
-        self.term.wait_for("BEP.", timeout=timeout)   # латентная часть баннера
-        self.term.wait_for("ОT ", timeout=timeout)
+        self.term.wait_for("BEP.", timeout=25)   # латентная часть баннера
+        self.term.wait_for("ОT ", timeout=25)
         text = fold(self.term.screen())
         assert "К  Р  А  Б" in text and "ВЕР." in text, \
             f"нет баннера КРАБ: {text!r}"
@@ -87,6 +89,11 @@ class KrabSession:
         """Окончание работы в номере (директива КОН)."""
         return self.send("кон", 3.0, timeout)
 
+    def inside_krab(self) -> bool:
+        """Открыт ли сейчас КРАБ (последняя строка кадра — его приглашение)."""
+        lines = [x.strip() for x in self.term.lines() if x.strip()]
+        return bool(lines) and lines[-1] in ("-", "#", "*")
+
     def login(self, user: str = USER, key: str = KEY,
               tries: int = 3) -> str:
         """Полный вход: вызвать КРАБ и войти в номер, с перезапуском.
@@ -99,13 +106,23 @@ class KrabSession:
         вызываем его снова.
         """
         last = ""
-        for _ in range(tries):
+        for attempt in range(tries):
+            if attempt:
+                # линия осталась в залипшем состоянии («нач» → НЕТ ДИРЕК):
+                # закрываем её и берём другую свободную линию ДКС
+                try:
+                    self.term.close()
+                except Exception:
+                    pass
+                self.term = Terminal(self.url, machine=self.machine)
             # если КРАБ уже вызван (повторный вход внутри сеанса), «краб»
             # не набираем — это не директива и даст «НЕТ ДИРЕК»
-            if "К  Р  А  Б" not in self.screen():
+            # баннер ищ��м по кадру ВМЕСТЕ с историей: в повторном
+            # входе баннер уже ушёл с экрана, но КРАБ открыт
+            if "К  Р  А  Б" not in self.term.text():
                 self.start()
-            self.send("кон", 1.5, 25)               # закрыть повисший сеанс
-            if "К  Р  А  Б" not in self.screen():   # КРАБ вышел — вызвать снова
+            self.send("кон", 1.0, 15)               # закрыть повисший сеанс
+            if not self.inside_krab():                # КРАБ вышел — снова
                 self.start()
             try:
                 return self.enter(user, key, tries=1)
@@ -126,7 +143,7 @@ class KrabSession:
                 return self.screen()
             self.term.type("кон")
             self.term.key("KEY_ENTER")
-            self.term.wait_quiet(1.5, timeout)
+            self.term.wait_quiet(1.0, timeout)
         return self.screen()
 
     # --- работа в сеансе -----------------------------------------------
@@ -134,8 +151,8 @@ class KrabSession:
 #: «+» — набор строк в директиве ДОП, «/» — редактор РЕД
     PROMPTS = ("-", "*", "+", "/", "КОНЕЦ СЕАНСА")
 
-    def directive(self, cmd: str, quiet: float = 0.4,
-                  timeout: float = 20.0) -> str:
+    def directive(self, cmd: str, quiet: float = 0.2,
+                  timeout: float = 15.0) -> str:
         """Исполнить директиву, вернуть только её выдачу (свернутую fold).
 
         Ожидание — по приглашению («-» в Мониторе, «*» в программе ЛИСТ),
@@ -150,19 +167,24 @@ class KrabSession:
                          for x in self.term.new_lines(rev) if x.strip())
 
     def _await_prompt(self, rev: int, timeout: float) -> bool:
-        """Ждать НОВОЕ приглашение: последняя строка кадра — «-»/«*».
+        """Ждать НОВОЕ приглашение — нижний изменившийся ряд кадра.
 
-        Отметка `rev` обязательна: приглашение от предыдущей директивы ещё
-        стоит последней строкой, и без проверки «изменилось ли после
-        отправки» метод возвращал бы пустой результат мгновенно.
+        Проверять «последняя строка = приглашение» нельзя: эхо набранной
+        директивы печатается строкой выше, а строка «-» от предыдущей
+        директивы остаётся на месте — условие выполняется уже на эхе.
+        Поэтому берём нижний изменившийся после отправки ряд и требуем,
+        чтобы им было приглашение.
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            lines = [x.rstrip() for x in self.term.lines() if x.strip()]
-            if (lines and lines[-1].strip() in self.PROMPTS
-                    and self.term.screen_.rev != rev):
-                self.term.wait_quiet(0.4, 5)      # добрать хвост выдачи
-                return True
+            rows = self.term.changed_since(rev)
+            if rows:
+                bottom = max(rows)
+                text = (self.term.screen_.row_text("frame", bottom)
+                        or "").strip()
+                if text in self.PROMPTS:
+                    self.term.wait_quiet(0.2, 1.5)   # добрать хвост выдачи
+                    return True
             self.term.pump(timeout=0.15)
         return False
 
@@ -183,6 +205,20 @@ class KrabSession:
 
     def screen(self) -> str:
         return fold(self.term.screen())
+
+    def cleanup(self, timeout: float = 15.0) -> str:
+        """Сбросить состояние номера: выйти из вложенных блоков, сбросить ПЗ.
+
+        Нужно между тестовыми классами: все они работают под одним номером
+        1234, а подчинённая задача у номера может быть только одна — иначе
+        «фор пз» отвечает «УЖЕ ЕСТЬ ПЗ».
+        """
+        self.ensure_monitor(timeout)
+        out = self.directive("что", timeout=timeout)
+        if "У ВАС НЕТ ПЗ" in out:
+            return out
+        self.directive("выб", timeout=timeout)       # сбросить подчинённую задачу
+        return self.directive("что", timeout=timeout)
 
     def close(self) -> None:
         """Выйти из номера и закрыть линию (буфер вывода надо опустошить)."""
