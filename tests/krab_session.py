@@ -146,7 +146,7 @@ class KrabSession:
             self.term.send()
         finally:
             self.term.set_mode(MODE_HOST)
-        self.term.wait_quiet(3.0, timeout)
+        self.term.wait_quiet(2.0, timeout)
         return "\n".join(x for x in self.term.lines() if x.strip()[-30:])
 
     def enter_line(self) -> None:
@@ -387,7 +387,7 @@ class KrabSession:
                 text = (self.term.screen_.row_text("frame", bottom)
                         or "").strip()
                 if text in self.PROMPTS:
-                    self.term.wait_quiet(0.3, 4.0)   # добрать хвост выдачи
+                    self.term.wait_quiet(0.3, 2.0)   # добрать хвост выдачи
                     return True
             self.term.pump(timeout=0.15)
         return False

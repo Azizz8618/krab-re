@@ -58,6 +58,7 @@ def make_file(kr: KrabSession, lines=LINES) -> str:
     пока не придёт пустая, поэтому каждая строка — отдельный вызов, а конец
     ввода проверяется возвратом приглашения «-» в Монитор.
     """
+    kr.ensure_monitor()                          # из ЛИСТ/Школы, если застряли
     name = fname()
     out = kr.directive(f"имя {name}")
     assert "ИМЯ НЕ ИДЕНТИФИКАТОР" not in out, f"имя отвергнуто: {name} — {out!r}"
@@ -81,30 +82,32 @@ def _dli(kr: KrabSession) -> tuple[int, int, int]:
     в окне попадают и имена файлов, где четвёрки тоже есть.
     """
     out = kr.directive("дли")
+    picked = None
     for line in out.splitlines():
         m = re.fullmatch(r"\s*(\d{4})\s+(\d{4})\s+(\d{4})\s*", line)
         if m:
-            return tuple(int(m.group(i)) for i in (1, 2, 3))
-    raise AssertionError(f"ДЛИ без строки из трёх четёрок: {out!r}")
+            picked = m                       # последнее вхождение — новейшее
+    if picked is None:
+        raise AssertionError(f"ДЛИ без строки из трёх четёрок: {out!r}")
+    return tuple(int(picked.group(i)) for i in (1, 2, 3))
 
 
-def cards_of(kr: KrabSession, tries: int = 3) -> int:
-    """Число карт текущего файла — устойчиво к запаздыванию ответа.
+def cards_of(kr: KrabSession, tries: int = 2) -> int:
+    """Число карт текущего файла.
 
-    Машина печатает эхо директивы раньше, чем правка вступает в силу, и ДЛИ,
-    отправленный сразу после, успевает показать состояние ДО правки (проверено
-    на живой машине: после «дбл 1 1 4» первый ДЛИ отдавал прежние 4 карты
-    вместо 5). Поэтому читаем ДЛИ до двух совпадений подряд — только тогда
-    состояние считается устоявшимся.
+    Ответ машины может прийти позже эха директивы, поэтому ДЛИ отправляется
+    не сразу, а после паузы ~3 с (двойное чтение «до двух совпадений»
+    оказалось слишком дорогим: каждый замер занимал полминуты, а набор —
+    минуты). При не Urdu читаемом ответе — один повтор.
     """
-    prev = None
-    for _ in range(tries):
-        kr.term.wait_quiet(1.5, 30)
-        cur = _dli(kr)
-        if cur == prev:
-            return cur[0]
-        prev = cur
-    return prev[0]
+    for attempt in range(tries):
+        kr.term.wait_quiet(0.8 if attempt else 2.0, 30)
+        try:
+            return _dli(kr)[0]
+        except AssertionError:
+            if attempt + 1 == tries:
+                raise
+    raise AssertionError("ДЛИ не отвечает")
 
 
 class KrabEdit(unittest.TestCase):
@@ -211,6 +214,9 @@ class EditTextFile(KrabEdit):
         """ЛИС без подчинённой задачи быстро отвечает, не виснет."""
         out = self.kr.directive("лис", quiet=2.0, timeout=45)
         self.assertTrue(fold(out), "нет ответа на ЛИС")
+        # если ЛИС всё же вошёл в программу Лист — вернуться в Монитор,
+        # иначе ввод следующего теста уйдёт в Лист и «наведёт» его отказом
+        self.kr.ensure_monitor()
 
     def test_10_vse_diagnostiki_posl_i_slov(self):
         """Строка читается дословно: ВЫД отдаёт карту с номером."""
