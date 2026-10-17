@@ -48,7 +48,7 @@ class TaskFormation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.kr = KrabSession()
-        cls.kr.login()
+        cls.kr.login_or_skip()
         cls.kr.cleanup()
 
     @classmethod

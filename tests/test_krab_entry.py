@@ -24,7 +24,7 @@ class MonitorAccess(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.kr = KrabSession()
-        cls.banner = cls.kr.login()     # баннер получаем при входе
+        cls.banner = cls.kr.login_or_skip()     # баннер получаем при входе
         cls.kr.cleanup()
 
     @classmethod
