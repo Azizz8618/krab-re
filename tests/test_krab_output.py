@@ -64,8 +64,6 @@ class OutputDirectives(unittest.TestCase):
         self.kr.cleanup()
 
     def tearDown(self):
-        from test_krab_edit_form import drop_made
-        drop_made(self.kr)                 # убрать файлы сбойных зон
         self.kr.cleanup()
         self.kr.close()
 
@@ -127,8 +125,6 @@ class MacDirective(unittest.TestCase):
         self.kr.cleanup()
 
     def tearDown(self):
-        from test_krab_edit_form import drop_made
-        drop_made(self.kr)                 # убрать файлы сбойных зон
         self.kr.cleanup()
         self.kr.close()
 
@@ -194,8 +190,6 @@ class AcpuPrint(unittest.TestCase):
         self.kr.cleanup()
 
     def tearDown(self):
-        from test_krab_edit_form import drop_made
-        drop_made(self.kr)                 # убрать файлы сбойных зон
         self.kr.cleanup()
         self.kr.close()
 

@@ -17,7 +17,21 @@ cd "$DIR"
 FILES="test_krab_entry.py
 test_krab_directives.py
 test_krab_edit_form.py
+test_krab_output.py
 test_krab_task_list.py"
+
+# Перед прогоном — освободить сбойные зоны номера. Файлы тестов живут на
+# них после сеанса, и при исчерпании комплекта ИМЯ отвечает
+# «НЕТ ЗОН ДЛЯ УПРЯТ»: тесты падают ещё до своих проверок. Чистка идёт
+# одной сессией (пара ИМЯ X / ИМЯ X на каждый файл). Пропустить:
+#   KRAB_SKIP_SBO_CLEAN=1 sh tests/run_all.sh
+if [ "${KRAB_SKIP_SBO_CLEAN:-0}" != "1" ]; then
+    printf '=== очистка сбойных зон ===
+'
+    python3 -u ../tools/clear_sbo.py --rounds 40 || \
+        printf 'не удалось очистить сбойные зоны — наборы могут упасть на ИМЯ
+'
+fi
 
 TOTAL_START=$(date +%s)
 FAILED=""
