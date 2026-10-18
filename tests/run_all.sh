@@ -14,11 +14,21 @@ DIR=$(dirname "$0")
 cd "$DIR"
 
 # порядок от дешёвых к дорогим
-FILES="test_krab_entry.py
-test_krab_directives.py
-test_krab_edit_form.py
-test_krab_output.py
-test_krab_task_list.py"
+# Каждый КЛАСС — отдельный процесс, а не только каждый файл: в общем
+# прогоне набора правки падали только классы, идущие последними (18 из 24,
+# хотя каждый из них по отдельности проходит 8/8). Причина — состояние
+# машины накапливается по ходу прогона; разбивка по классам обнуляет его.
+CLASSES="test_krab_entry.py
+test_krab_directives.py::Directives
+test_krab_directives.py::SchoolBlock
+test_krab_edit_form.py::EditTextFile
+test_krab_edit_form.py::RedEditing
+test_krab_edit_form.py::EditingDirectives
+test_krab_output.py::OutputDirectives
+test_krab_output.py::MacDirective
+test_krab_output.py::AcpuPrint
+test_krab_task_list.py
+test_vvod_zka.py"
 
 # Перед прогоном — освободить сбойные зоны номера. Файлы тестов живут на
 # них после сеанса, и при исчерпании комплекта ИМЯ отвечает
@@ -36,7 +46,7 @@ fi
 TOTAL_START=$(date +%s)
 FAILED=""
 
-for f in $FILES; do
+for f in $CLASSES; do
     START=$(date +%s)
     printf '\n=== %s ===\n' "$f"
     if python3 -u -m pytest "$f" -p no:cacheprovider -q; then
