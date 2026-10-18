@@ -58,16 +58,17 @@ def _cards(kr: KrabSession) -> int:
 class OutputDirectives(unittest.TestCase):
     """АЦП, ПК, ПЛ — печать и перфорация текущего файла."""
 
-    @classmethod
-    def setUpClass(cls):
-        cls.kr = KrabSession()
-        cls.kr.login_or_skip()
-        cls.kr.cleanup()
+    def setUp(self):
+        # сеанс на каждый тест: в длинном общем сеансе ответы машины
+        # запаздывают, и окна ожидания выгорают (проверено 18.10.2026 —
+        # в общем сеансе падали те же тесты, что по отдельности проходят)
+        self.kr = KrabSession()
+        self.kr.login_or_skip()
+        self.kr.cleanup()
 
-    @classmethod
-    def tearDownClass(cls):
-        cls.kr.cleanup()
-        cls.kr.close()
+    def tearDown(self):
+        self.kr.cleanup()
+        self.kr.close()
 
     def _vydacha(self, cmd: str, path: Path, timeout: float = 60.0) -> str:
         """Выполнить вывод и проверить признак успеха по файлу устройства.
@@ -135,16 +136,17 @@ class MacDirective(unittest.TestCase):
     или `мас …` без признака уходит в файл обычным текстом.
     """
 
-    @classmethod
-    def setUpClass(cls):
-        cls.kr = KrabSession()
-        cls.kr.login_or_skip()
-        cls.kr.cleanup()
+    def setUp(self):
+        # сеанс на каждый тест: в длинном общем сеансе ответы машины
+        # запаздывают, и окна ожидания выгорают (проверено 18.10.2026 —
+        # в общем сеансе падали те же тесты, что по отдельности проходят)
+        self.kr = KrabSession()
+        self.kr.login_or_skip()
+        self.kr.cleanup()
 
-    @classmethod
-    def tearDownClass(cls):
-        cls.kr.cleanup()
-        cls.kr.close()
+    def tearDown(self):
+        self.kr.cleanup()
+        self.kr.close()
 
     def test_01_priznak_direktivy(self):
         """`УПД` выдаёт признак директивы — точка (а не дефис)."""
@@ -199,16 +201,17 @@ class AcpuPrint(unittest.TestCase):
     вынесена так, чтобы не мешать остальным.
     """
 
-    @classmethod
-    def setUpClass(cls):
-        cls.kr = KrabSession()
-        cls.kr.login_or_skip()
-        cls.kr.cleanup()
+    def setUp(self):
+        # сеанс на каждый тест: в длинном общем сеансе ответы машины
+        # запаздывают, и окна ожидания выгорают (проверено 18.10.2026 —
+        # в общем сеансе падали те же тесты, что по отдельности проходят)
+        self.kr = KrabSession()
+        self.kr.login_or_skip()
+        self.kr.cleanup()
 
-    @classmethod
-    def tearDownClass(cls):
-        cls.kr.cleanup()
-        cls.kr.close()
+    def tearDown(self):
+        self.kr.cleanup()
+        self.kr.close()
 
     def test_01_pechat_pn(self):
         """`АЦП ПН` печатает файл: растёт файл центрального АЦПУ.
