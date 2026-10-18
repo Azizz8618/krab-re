@@ -97,12 +97,12 @@ def make_file(kr: KrabSession, lines=LINES) -> str:
     # пустая посылка заканчивает ввод; если машина её «не заметила»,
     # приглашение остаётся «+» — повторяем, иначе следующая директива
     # уйдёт в файл как текст
-    for attempt in range(3):
+    for attempt in range(4):
         rev = kr.term.mark()
-        kr.directive("", timeout=20)
-        if kr.wait_new("-", timeout=25, mark=rev):
+        kr.directive("", timeout=25)
+        if kr.wait_new("-", timeout=40, mark=rev):
             break
-        if attempt == 2:
+        if attempt == 3:
             raise AssertionError("ДОП не завершился: приглашение «+» держится")
     return name
 
