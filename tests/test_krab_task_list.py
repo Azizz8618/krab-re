@@ -83,21 +83,50 @@ class TaskFormation(unittest.TestCase):
             time.sleep(pause)
         return False
 
-    def form_pz(self, nm: str = "форгдр") -> str:
-        """Сформировать подчинённую задачу из файла архива.
+    #: ответы Формирователя, по которым видно, что директива обработана
+    FORM_MARKS = ("ШИФР", "ШИФP", "ВОЙТИ", "УЖЕ ЕСТЬ ПЗ", "ОШИБКА В ПАСПОРТЕ",
+                  "ЗАПРЕЩ", "НЕТ МЕСТА", "ДЛИННЫЙ ПАСПОРТ", "НЕТ СВОБОДНЫХ")
 
-        Диалог на живой машине:
+    def form_pz(self, nm: str = "форгдр", finish: bool = False) -> str:
+        """Сформировать подчинённую задачу и дождаться ответа Формирователя.
+
+        Ответ приходит с задержкой (Формирователь читает паспорт из архива),
+        поэтому ждём по СОДЕРЖИМОМУ, а не по паузе: иначе следующий шаг
+        (ответ на «ВОЙТИ?» или вызов ЛИСТ) уходит раньше, чем задача
+        появилась. Диалог на живой машине:
+
             имя форгдр -> ФОР ПЗ -> ШИФР 123400000000
-                                  ПОДСИСТЕМА ВКЛЮЧЕНА / ВОЙТИ? (ДА,НЕТ)
-        На «ВОЙТИ?» отвечаем ДА — иначе подсистема остаётся выключенной
-        и последующий «лис» отвечает «НЕТ ПЗ В РЕШЕНИИ».
+                                    ПОДСИСТЕМА ВКЛЮЧЕНА / ВОЙТИ? (ДА,НЕТ)
+
+        finish=True — дождаться окончания задачи («ОКОНЧИЛАСЬ ЗАДАЧА»).
         """
         self.ensure_monitor()
         self.wait_pz_free()
         self.out(f"имя {nm}")
-        out = self.out("фор пз", quiet=2.5, timeout=20)
+        rev = self.kr.term.mark()
+        self.kr.term.type("фор пз")
+        self.kr.enter_line()
+        out = ""
+        for _ in range(20):                     # до ~2 минут
+            self.kr.term.pump(3.0)
+            out = "\n".join(fold(x.strip())
+                            for x in self.kr.term.new_lines(rev) if x.strip())
+            if any(m in out for m in self.FORM_MARKS):
+                break
         if "ВОЙТИ" in out:
-            out += "\n" + self.out("да", quiet=2.5, timeout=20)
+            self.kr.term.type("да")
+            self.kr.enter_line()
+            self.kr.term.wait_quiet(3.0, 60)
+            out += "\n" + "\n".join(fold(x.strip())
+                                     for x in self.kr.term.new_lines(rev) if x.strip())
+        if finish:
+            for _ in range(40):                 # до ~4 минут
+                self.kr.term.pump(3.0)
+                text = "\n".join(fold(x.strip())
+                                 for x in self.kr.term.new_lines(rev) if x.strip())
+                if "ЧИЛ" in text:               # «ОКОНЧИЛАСЬ ЗАДАЧА»
+                    out = text
+                    break
         return out
 
     # --- каталог --------------------------------------------------------
@@ -135,7 +164,7 @@ class TaskFormation(unittest.TestCase):
     # --- формирование и просмотр ---------------------------------------
     def test_04_for_pz_puts_task_on_buffer(self):
         """ФОР ПЗ: задача получает шифр и доводится до конца."""
-        out = self.form_pz()
+        out = self.form_pz(finish=True)
         # в выдаче Н2: «ШИФP» — P латинская, «ЗAДAЧA» — кириллические
         text = latin_fold(out)
         self.assertIn("ШИФP", text)
@@ -147,10 +176,11 @@ class TaskFormation(unittest.TestCase):
     def test_05_lis_shows_listing_of_task(self):
         """ЛИС → ДЛИ → ВЫД: листинг подчинённой задачи виден на экране."""
         self.form_pz()
-        self.out("лис", quiet=2.5, timeout=20)
-        # ждём баннер программы ЛИСТ («ЛИСТ*ВЕР…»)
+        self.out("лис", quiet=2.5, timeout=30)
+        # ждём баннер программы ЛИСТ («ЛИСТ*ВЕР…»): он печатается, когда
+        # задача действительно есть — иначе приходит «У ВАС НЕТ ПЗ»
         self.assertTrue(
-            self.kr.term.wait_for("ЛИCT", timeout=20),
+            self.kr.term.wait_for("ЛИCT", timeout=60),
             f"нет программы ЛИСТ: {self.kr.screen()!r}",
         )
         dl = self.out("дли", quiet=2.0, timeout=15)
@@ -166,8 +196,8 @@ class TaskFormation(unittest.TestCase):
     def test_06_kon_from_list_back_to_monitor(self):
         """КОН в программе ЛИСТ возвращает в Монитор абонентов («-»)."""
         self.form_pz()
-        self.out("лис", quiet=2.5, timeout=20)
-        self.kr.term.wait_for("ЛИCT", timeout=20)
+        self.out("лис", quiet=2.5, timeout=30)
+        self.kr.term.wait_for("ЛИCT", timeout=60)
         self.out("кон", quiet=2.0, timeout=15)
         lines = [x.strip() for x in self.kr.term.lines() if x.strip()]
         self.assertTrue(lines and lines[-1] == "-",
