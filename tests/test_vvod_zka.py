@@ -26,8 +26,10 @@ from krab_session import KrabSession
 
 #: шаблон колоды и рабочий каталог ввода ОС ДИСПАК
 VVOD = Path.home() / "Yandex.Disk" / "simh" / "BESM6" / "VVOD"
-TEMPLATE = VVOD / "vvod_dubna.txt"
-DECK = VVOD / "zka_test.txt"
+#: колода ЗКА: шапка — паспорт «шифр 410300 зка», хвост — ФИНИШ/ЕКОНЕЦ;
+#: документ вставляется между ними (готовый сценарий — UVU/krab.input.ini)
+TEMPLATE = VVOD / "vkrab.txt"
+DECK = VVOD / "vkrab_test.txt"
 TMUX = "besm6:0"
 
 #: текст проверяемого документа
@@ -55,11 +57,25 @@ def simh_console(commands, hold: float = 2.0) -> None:
 
 
 def build_deck() -> str:
-    """Колода из шаблона с текстом документа между шапкой и хвостом."""
+    """Колода ЗКА с документом между концом программы и концом колоды.
+
+    Шапка колоды в оригинале — `шифр 410300 зка^`; на этой машине шифр
+    410300 не зарегистрирован в ОС, и ввод отвечает `З ШИФР` («запрещённый
+    шифр… заказ стандартного паспорта сделан неверно»), а раздела `ВХОД` в
+    шапке нет — вторая ошибка `Ч ЛИСТ`. Поэтому шапка заменяется на наш
+    зарегистрированный шестизначный шифр и добавляется явный `ВХОД 70000` (адрес СТАРТ
+    программы: `ГЕН СТАРТ '70000'`).
+
+    Конец программы — карта `ФИНИШ`, конец колоды — `ЕКОНЕЦ`; документ
+    читается программы с того же устройства ввода, поэтому текст вставляется
+    между ними.
+    """
     lines = TEMPLATE.read_text(encoding="utf-8").split("\n")
-    head_end = next(i for i, x in enumerate(lines) if x.strip() == "ЕВ1") + 1
-    tail_start = next(i for i, x in enumerate(lines) if x.strip() == "ЕКОНЕЦ")
-    return "\n".join(lines[:head_end] + list(DOCUMENT) + lines[tail_start:])
+    lines[0] = "шифр 123400 зс5^"
+    lines.insert(1, "ВХОД 70000^")
+    fi = next(i for i, x in enumerate(lines) if x.strip() == "ФИНИШ")
+    ko = next(i for i, x in enumerate(lines) if x.strip() == "ЕКОНЕЦ")
+    return "\n".join(lines[:fi + 1] + list(DOCUMENT) + lines[ko:])
 
 
 def sbo_files(kr: KrabSession) -> set[str]:
@@ -106,9 +122,11 @@ def feed_deck(path: Path, tries: int = 4, pause: float = 25.0) -> bool:
     замятие не убивают — нужно давать машине время.
     """
     for attempt in range(tries):
+        # готовый сценарий UVU/krab.input.ini: колода на считыватель
+        # перфоленты с флагом -t, затем сигнал FS8
         simh_console([
-            "detach vu0",
-            f"at vu0 {path}",
+            f"detach fs0",
+            f"at -t fs0 {path}",
             "d 6 1",
             "d 5 10",
             "set cpu req",
