@@ -95,6 +95,17 @@ python3 tools/decode.py original -d texts --check
 python3 tools/inventory.py original -o docs/INVENTORY.md
 ```
 
+Освобождение сбойных зон номера (без прав администратора):
+
+```bash
+python3 tools/clear_sbo.py --list     # только показать, что занято
+python3 tools/clear_sbo.py            # освободить
+```
+
+Работает по описанию `ИМЯ` из Школы: пара вызовов `ИМЯ <файл>` поднимает
+файл с сбойных зон и тут же уничтожает его как текущий. Подробнее —
+[`docs/EDITING.md`](docs/EDITING.md).
+
 Скрипты написаны на чистом Python 3 без внешних зависимостей.
 
 ## Живые тесты системы

@@ -338,17 +338,17 @@ class KrabSession:
     def ensure_monitor(self, timeout: float = 20.0) -> str:
         """Вернуть терминал в Монитор абонентов (приглашение «-»).
 
-        После блока Школы (приглашение «#») или программы ЛИСТ («*»)
-        директивы Монитора не работают — «ТЕР» даёт «ОШИБ». Отсюда
-        выход директивой КОН, пока не появится «-».
+        Из блока Школы («#») и из программы ЛИСТ («*») выход делается
+        директивой КОН, и один такой вызов возвращает в Монитор. Повторять
+        КОН НЕЛЬЗЯ: следующий вызов идёт уже из Монитора и закрывает номер
+        («КОНЕЦ СЕАНСА») — проверено на живой машине 18.10.2026.
         """
-        for _ in range(3):
-            lines = [x.strip() for x in self.term.lines() if x.strip()]
-            if not lines or lines[-1] == "-":
-                return self.screen()
-            self.term.type("кон")
-            self.enter_line()
-            self.term.wait_quiet(1.0, timeout)
+        lines = [x.strip() for x in self.term.lines() if x.strip()]
+        if not lines or lines[-1] == "-":
+            return self.screen()
+        self.term.type("кон")
+        self.enter_line()
+        self.term.wait_quiet(1.0, timeout)
         return self.screen()
 
     # --- работа в сеансе -----------------------------------------------

@@ -86,47 +86,63 @@ class Directives(unittest.TestCase):
         out = self.kr.directive("где")
         self.assertIn("У ВАС НЕТ ПЗ", out)
 
-    # --- школа ----------------------------------------------------------
-    def test_09_shko_spravka(self):
-        """ШКО выдаёт общую справку и список инструкций."""
-        rev = self.kr.term.mark()
-        self.kr.term.type("шко")
-        self.kr.term.key("KEY_ENTER")
-        self.kr.term.wait_quiet(2.5, 60)
-        text = "\n".join(self.kr.term.new_lines(rev))
-        text = fold(text)
-        self.assertIn("СИСТЕМА КРАБ ПРЕДСТАВЛЯЕТ СОБОЙ КОМПЛЕКС",
-                      text)
-        self.assertIn("ШКО ИНС", text)
-
-    def test_10_shko_ins_ma(self):
-        """ШКО ИНС МА настраивает школу на Монитор абонентов."""
-        self.kr.directive("шко инс ма", timeout=20)
-        # «шко дир» печатает справку о пяти группах; список директив
-        # группы ВХОДА-ВЫХОДА — по «шко дир вх», там есть НАЧ
-        out = self.kr.directive("шко дир вх", timeout=20)
-        # сами директивы Школа печатает с разрядкой («Н А Ч»), а описания
-        # слитно — сверяем по описанию директивы НАЧ
-        self.assertIn("НАЧАЛО РАБОТЫ", out)
-
-    def test_11_kon_posle_shkoly(self):
-        """Даже из блока Школы КОН закрывает номер."""
-        out = self.kr.exit()
-        self.assertIn("КОН", out)
-
-    # --- только что вошедший пользователь -------------------------------
-    def test_12_povtorny_vhod(self):
-        """После КОН повторный вход тем же номером работает."""
-        # мы всё ещё внутри КРАБ (после КОН номер закрыт, но система
-        # вызвана) — достаточно войти заново, «краб» набирать не нужно
-        self.kr.enter()
-        self.kr.ensure_monitor()
-        out = self.kr.directive("тер", timeout=20)
-        if "ФИЗТЕР" not in out:      # на загруженной машине ответ отстаёт
-            out = self.kr.directive("тер", timeout=20)
-        self.assertIn("ФИЗТЕР", out)
-        self.kr.exit()
 
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class SchoolBlock(unittest.TestCase):
+    """Блок Школы и повторный вход — в СВОЁМ сеансе.
+
+    В общем сеансе класса Школа «залипает»: эхо директив идёт, а ответы
+    приходят с задержкой в минуты, и проверки Школы падают по таймауту
+    (проверено 18.10.2026). В свежем сеансе Школа отвечает за секунды,
+    поэтому эти проверки выполняются на отдельном входе.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.kr = KrabSession()
+        cls.kr.login_or_skip()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.kr.close()
+
+    def test_01_shko_spravka(self):
+        """ШКО выдаёт общую справку и список инструкций."""
+        out = self.kr.directive("шко", timeout=90)
+        self.assertIn("СИСТЕМА КРАБ ПРЕДСТАВЛЯЕТ СОБОЙ КОМПЛЕКС", out)
+        self.assertIn("ШКО ИНС", out)
+
+    def test_02_shko_ins_ma(self):
+        """ШКО ИНС МА настраивает школу на Монитор абонентов."""
+        self.kr.directive("шко инс ма", timeout=90)
+        # «шко дир» печатает справку о пяти группах; список директив
+        # группы ВХОДА-ВЫХОДА — по «шко дир вх», там есть НАЧ.
+        # Директивы Школа печатает с разрядкой («Н А Ч»), описания
+        # слитно — сверяем по описанию директивы НАЧ.
+        out = self.kr.directive("шко дир вх", timeout=90)
+        self.assertIn("НАЧАЛО РАБОТЫ", out)
+
+    def test_03_kon_vozvrashchaet_v_monitor(self):
+        """КОН из блока Школы возвращает в Монитор абонентов.
+
+        Это и есть штатный выход из Школы: приглашение меняется с «#»
+        на «-», номер остаётся открытым — следующая директива работает.
+        """
+        self.kr.exit()
+        out = self.kr.directive("тер", timeout=60)
+        self.assertIn("ФИЗТЕР", out)
+
+    def test_04_kon_zakryvaet_nomer_i_povtorny_vhod(self):
+        """КОН из Монитора закрывает номер, повторный вход работает."""
+        out = self.kr.exit()
+        self.assertIn("КОНЕЦ СЕАНСА", out)
+        # КРАБ уже вызван (номер закрыт, система осталась) — достаточно
+        # войти заново, «краб» набирать не нужно
+        self.kr.enter()
+        out = self.kr.directive("тер", timeout=60)
+        self.assertIn("ФИЗТЕР", out)
+        self.kr.exit()
