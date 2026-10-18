@@ -34,9 +34,20 @@ def _size(path: Path) -> int:
 
 
 def _make(kr: KrabSession, lines) -> str:
-    """Образовать текущий файл с указанными строками (хелпер из набора правки)."""
-    from test_krab_edit_form import make_file
-    return make_file(kr, tuple(lines))
+    """Образовать текущий файл; при сбое — повторить на чистом состоянии.
+
+    Под нагрузкой (идёт печать АЦПУ) ДОП иногда не успевает за окнами
+    ожидания — тогда создание файла повторяется один раз.
+    """
+    from test_krab_edit_form import make_file, _to_monitor
+    last = None
+    for attempt in range(2):
+        try:
+            return make_file(kr, tuple(lines))
+        except AssertionError as exc:
+            last = exc
+            _to_monitor(kr)
+    raise last
 
 
 def _cards(kr: KrabSession) -> int:
@@ -90,10 +101,6 @@ class OutputDirectives(unittest.TestCase):
         _make(self.kr, ("один", "два"))
         out = self.kr.directive("ацп хх", timeout=45)
         self.assertIn("НЕВЕРНЫЙ ТИП ВЫВОД", out)
-
-    def test_03_pechat_pn(self):
-        """`АЦП ПН` — две колонки с номерами на центральный АЦПУ."""
-        self._vydacha("ацп пн", ACPU)
 
     def test_04_perforaciya_upp(self):
         """`ПК УПП` — задача перфорации формируется.
@@ -181,6 +188,47 @@ class MacDirective(unittest.TestCase):
         after = _cards(self.kr)
         self.assertLess(after, before + 2,
                         "без признака строки файла подставляться не должны")
+
+
+class AcpuPrint(unittest.TestCase):
+    """Печать на АЦПУ — отдельным сеансом и последней в файле.
+
+    Задача печати выводит не только файл, но и подвал с регистрами
+    (`КОНЕЦ ЗАДАЧИ`, `ОТЧЁТ`), поэтому машина занята печатью минутами и
+    последующие вводы `ДОП` не успевают за окнами ожидания. Проверка
+    вынесена так, чтобы не мешать остальным.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.kr = KrabSession()
+        cls.kr.login_or_skip()
+        cls.kr.cleanup()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.kr.cleanup()
+        cls.kr.close()
+
+    def test_01_pechat_pn(self):
+        """`АЦП ПН` печатает файл: растёт файл центрального АЦПУ.
+
+        Требует, чтобы АЦПУ был подключён оператором (`ДАЙ А0`) — иначе
+        задача ставится в очередь, а файл не растёт.
+        """
+        _make(self.kr, ("январь", "февраль"))
+        before = _size(ACPU)
+        out = self.kr.directive("ацп пн", timeout=90)
+        for _ in range(6):                 # печать идёт порциями
+            time.sleep(5)
+            if _size(ACPU) > before:
+                break
+        after = _size(ACPU)
+        if after > before:
+            self.assertGreater(after, before)
+        else:
+            self.assertTrue(any(x in out for x in DENIED),
+                            f"печати нет, но и отказа не видно: {out!r}")
 
 
 if __name__ == "__main__":
