@@ -37,6 +37,26 @@ LINES = ("январь", "февраль", "март")
 
 _counter = itertools.count(1)
 
+#: имена файлов, созданных в текущем тесте: их надо уничтожать, иначе
+#: сбойные зоны переполняются и ИМЯ начинает отвечать «НЕТ ЗОН ДЛЯ УПРЯТ»
+_made: list[str] = []
+
+
+def drop_made(kr: KrabSession) -> None:
+    """Уничтожить файлы, созданные тестом (приём из ШКО ИМЯ).
+
+    Первый вызов ИМЯ поднимает файл с сбойных зон (он становится текущим),
+    второй — уничтожает текущий и не находит: зона освобождается. Без этого
+    набор за прогон занимает десяток зон и следующий прогон не работает.
+    """
+    while _made:
+        name = _made.pop()
+        for _ in range(2):
+            try:
+                kr.directive(f"имя {name.lower()}", timeout=25)
+            except Exception:
+                return
+
 
 def fname() -> str:
     """Имя файла, уникальное в пределах прогона и не длиннее шести знаков.
@@ -104,6 +124,7 @@ def make_file(kr: KrabSession, lines=LINES) -> str:
             break
         if attempt == 3:
             raise AssertionError("ДОП не завершился: приглашение «+» держится")
+    _made.append(name)
     return name
 
 
@@ -154,6 +175,10 @@ class KrabEdit(unittest.TestCase):
         cls.kr = KrabSession()
         cls.kr.login_or_skip()
         cls.kr.cleanup()
+
+    def tearDown(self):
+        # файлы сбойных зон живут после сеанса: убираем за собой
+        drop_made(self.kr)
 
     @classmethod
     def tearDownClass(cls):
