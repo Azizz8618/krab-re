@@ -21,9 +21,6 @@ from krab_session import KrabSession
 
 #: АЦПУ БЭСМ-6: файл, куда эмулятор пишет центральную печать
 ACPU = Path.home() / "Yandex.Disk" / "simh" / "BESM6" / "ACPU" / "output.txt"
-#: перфокарты и перфолента (см. dispak.ini: vu0 и pl0)
-CARDS = Path.home() / "Yandex.Disk" / "simh" / "BESM6" / "UVU" / "punchcard.txt"
-TAPE = Path.home() / "Yandex.Disk" / "simh" / "BESM6" / "UVU" / "punch.txt"
 
 #: отказы, которыми гость может получить печать вместо задачи
 DENIED = ("НЕ ИМЕЕТЕ ПРАВА", "НЕТ БЮДЖЕТА", "ЗАПРЕЩ", "НЕТ МЕСТА")
@@ -69,23 +66,6 @@ class OutputDirectives(unittest.TestCase):
     def tearDown(self):
         self.kr.cleanup()
         self.kr.close()
-
-    def _vydacha(self, cmd: str, path: Path, timeout: float = 60.0) -> str:
-        """Выполнить вывод и проверить признак успеха по файлу устройства.
-
-        Успех — рост файла устройства (АЦПУ, перфокарты, перфолента).
-        Если вывода нет, ответ должен быть одним из отказов: у гостя без
-        бюджета печать может быть запрещена, и тест это фиксирует.
-        """
-        _make(self.kr, ("один", "два"))
-        before = _size(path)
-        out = self.kr.directive(cmd, timeout=timeout)
-        time.sleep(3)
-        after = _size(path)
-        if after <= before:
-            self.assertTrue(any(x in out for x in DENIED),
-                            f"вывода нет, но и отказа не видно: {out!r}")
-        return out
 
     def test_01_pechat_bez_fayla(self):
         """Без текущего файла печать отвергается.
