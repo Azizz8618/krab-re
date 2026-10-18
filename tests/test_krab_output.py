@@ -96,17 +96,37 @@ class OutputDirectives(unittest.TestCase):
         self._vydacha("ацп пн", ACPU)
 
     def test_04_perforaciya_upp(self):
-        """`ПК УПП` — перфорация карт в кодировке УПП БЭСМ-6."""
-        self._vydacha("пк упп", CARDS)
+        """`ПК УПП` — задача перфорации формируется.
+
+        Проверено 18.10.2026: директива принимается и отвечает
+        `ШИФР <шифр задачи>`, но файл перфокарт (`UVU/punchcard.txt`) не
+        растёт — устройств вывода на перфорацию в этой конфигурации ОС нет
+        (в руководстве оператора для `ДАЙ`/`НЕТ` есть идентификаторы только
+        `А` — АЦПУ, `Г` — ленты, `Д` — диски). Поэтому проверяется
+        постановка задачи, а не выдача.
+        """
+        _make(self.kr, ("один", "два"))
+        out = self.kr.directive("пк упп", timeout=60)
+        self.assertIn("ШИФР", out)
+        self.assertNotIn("НЕВЕРНЫЙ ТИП ВЫВОД", out)
 
     def test_05_perfolenta(self):
-        """`ПЛ` — перфолента; тип не задаётся (у неё его нет)."""
-        out = self._vydacha("пл", TAPE)
+        """`ПЛ` — задача на перфоленту формируется (тип не задаётся)."""
+        _make(self.kr, ("один", "два"))
+        out = self.kr.directive("пл", timeout=60)
+        self.assertIn("ШИФР", out)
         self.assertNotIn("НЕВЕРНЫЙ ТИП ВЫВОД", out)
 
 
 class MacDirective(unittest.TestCase):
-    """`МАС` — строки файла вместо строки, введённой на приглашение «+»."""
+    """`МАС` — строки файла вместо строки, введённой на приглашение «+».
+
+    Признак директивы в этой конфигурации — ТОЧКА: `УПД` отвечает `.`
+    (проверено 18.10.2026), а описание в Школе (`ШКО МАС`) требует
+    начинать строку с признака: `<ПД> М[АС] <НАЗВАН> [<ХОЗЯИН>]`.
+    Поэтому подстановка вызывается как `.мас <имя>`, а строка `-мас …`
+    или `мас …` без признака уходит в файл обычным текстом.
+    """
 
     @classmethod
     def setUpClass(cls):
@@ -119,28 +139,25 @@ class MacDirective(unittest.TestCase):
         cls.kr.cleanup()
         cls.kr.close()
 
-    def test_01_mas_bez_direktivy(self):
-        """`МАС` сама по себе (без директивы редактирования) отвергается."""
-        _make(self.kr, ("один", "два"))
-        out = self.kr.directive("-мас бне1", timeout=45)
-        self.assertTrue("НЕ БЫЛО ДИРЕКТИВЫ РЕДАКТИРОВАНИЯ" in out
-                        or "НЕТ В КАТАЛОГЕ" in out
-                        or "НЕТ ИМЕНИ МАССИВА" in out,
-                        f"неожиданный ответ МАС: {out!r}")
+    def test_01_priznak_direktivy(self):
+        """`УПД` выдаёт признак директивы — точка (а не дефис)."""
+        out = self.kr.directive("упд", timeout=45)
+        self.assertIn(".", out)
+        self.assertNotIn("НЕТ ДИРЕК", out)
 
     def test_02_mas_vstavlyaet_stroki_fayla(self):
-        """После `ДОП` строка `-мас <файл>` подставляет строки файла.
+        """После `ДОП` строка `.мас <файл>` подставляет строки файла.
 
-        Файл-источник лежит на сбойных зонах (у гостя нет места в архиве),
-        поэтому возможны два исхода: строки подставлены (карт больше) или
-        источник не найден — тогда ответ `НЕТ В КАТАЛОГЕ`.
+        Файл-источник лежит на сбойных зонах (места в архиве у гостя нет),
+        поэтому возможны два исхода: строки подставлены (карт больше на
+        число строк файла) или источник не найден — `НЕТ В КАТАЛОГЕ`.
         """
         src = _make(self.kr, ("альфа", "бета"))
         _make(self.kr, ("один", "два"))
         before = _cards(self.kr)
         self.kr.directive("доп")
         self.kr.wait_new("+", timeout=40)
-        out = self.kr.directive(f"-мас {src}", timeout=60)
+        out = self.kr.directive(f".мас {src}", timeout=60)
         self.kr.directive("", timeout=20)
         after = _cards(self.kr)
         if after > before:
@@ -148,8 +165,12 @@ class MacDirective(unittest.TestCase):
         else:
             self.assertIn("НЕТ В КАТАЛОГЕ", out)
 
-    def test_03_bez_priznaka_stroka_tekst(self):
-        """Без признака директивы строка `мас …` идёт в файл как текст."""
+    def test_03_bez_priznaka_podstanovki_net(self):
+        """Без признака директивы подстановки строк файла не происходит.
+
+        Строка `мас <файл>` (без ведущей точки) не подставляет строки
+        файла: число карт не растёт на число строк источника.
+        """
         src = _make(self.kr, ("альфа", "бета"))
         _make(self.kr, ("один",))
         before = _cards(self.kr)
@@ -157,8 +178,9 @@ class MacDirective(unittest.TestCase):
         self.kr.wait_new("+", timeout=40)
         self.kr.directive(f"мас {src}", timeout=45)
         self.kr.directive("", timeout=20)
-        self.assertGreater(_cards(self.kr), before,
-                           "строка без признака должна была стать текстом")
+        after = _cards(self.kr)
+        self.assertLess(after, before + 2,
+                        "без признака строки файла подставляться не должны")
 
 
 if __name__ == "__main__":

@@ -51,6 +51,24 @@ def fname() -> str:
     return f"б{next(_counter) % 100:02d}{int(time.time()) % 100:02d}"
 
 
+def _to_monitor(kr: KrabSession) -> None:
+    """Гарантировать приглашение Монитора перед новым файлом.
+
+    Если предыдущий `ДОП` остался незакрытым (на экране «+»), новый `ДОП`
+    не печатает НОВОГО приглашения, и ожидание «+» не срабатывает —
+    тогда как ввод на самом деле уже открыт.
+    """
+    for _ in range(3):
+        lines = [x.strip() for x in kr.term.lines() if x.strip()]
+        last = lines[-1] if lines else ""
+        if last == "-":
+            return
+        if last == "+":                     # внутри ДОП — закрыть ввод
+            kr.directive("", timeout=20)
+            continue
+        kr.ensure_monitor()                 # Лист или Школа
+
+
 def make_file(kr: KrabSession, lines=LINES) -> str:
     """Образовать текущий файл и наполнить его строками через ДОП.
 
@@ -58,20 +76,34 @@ def make_file(kr: KrabSession, lines=LINES) -> str:
     пока не придёт пустая, поэтому каждая строка — отдельный вызов, а конец
     ввода проверяется возвратом приглашения «-» в Монитор.
     """
-    kr.ensure_monitor()                          # из ЛИСТ/Школы, если застряли
+    _to_monitor(kr)                              # закрыть прошлый ДОП/Лист
     name = fname()
     out = kr.directive(f"имя {name}")
-    assert "ИМЯ НЕ ИДЕНТИФИКАТОР" not in out, f"имя отвергнуто: {name} — {out!r}"
+    for diag in ("ИМЯ НЕ ИДЕНТИФИКАТОР", "НЕТ ЗОН ДЛЯ УПРЯТ",
+                 "ЗАТЕРТ КАТ СБЗ", "НЕТ СБОЙНЫХ ЗОН"):
+        assert diag not in out, f"файл не образован ({diag}): {out!r}"
     rev = kr.term.mark()
     kr.directive("доп")
     # «+» ждём только среди новых строк: на кадре ещё лежит «+» от прошлого
     # ввода, и поиск по всему экрану проходит, даже если ДОП не начался
-    assert kr.wait_new("+", timeout=40, mark=rev), "ДОП не спросил первую строку"
+    if not kr.wait_new("+", timeout=40, mark=rev):
+        # машина могла потерять директиву — повторяем её один раз
+        rev = kr.term.mark()
+        kr.directive("доп")
+        assert kr.wait_new("+", timeout=40, mark=rev), \
+            "ДОП не спросил первую строку"
     for text in lines:
         kr.directive(text, timeout=20)
-    rev = kr.term.mark()
-    kr.directive("", timeout=20)                 # пустая — конец ввода
-    assert kr.wait_new("-", timeout=40, mark=rev), "после ДОП не вернулся Монитор"
+    # пустая посылка заканчивает ввод; если машина её «не заметила»,
+    # приглашение остаётся «+» — повторяем, иначе следующая директива
+    # уйдёт в файл как текст
+    for attempt in range(3):
+        rev = kr.term.mark()
+        kr.directive("", timeout=20)
+        if kr.wait_new("-", timeout=25, mark=rev):
+            break
+        if attempt == 2:
+            raise AssertionError("ДОП не завершился: приглашение «+» держится")
     return name
 
 
